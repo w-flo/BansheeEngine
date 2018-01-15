@@ -3,6 +3,7 @@
 #include "Image/BsPixelData.h"
 #include "Image/BsPixelUtil.h"
 #include "String/BsUnicode.h"
+#include "Linux/BsLinuxInput.h"
 #include "Linux/BsLinuxPlatform.h"
 #include "Linux/BsLinuxWindow.h"
 #include "RenderAPI/BsRenderWindow.h"
@@ -13,6 +14,7 @@
 #include <X11/Xcursor/Xcursor.h>
 #include <X11/Xlib.h>
 #include <X11/XKBlib.h>
+#include <X11/extensions/XInput2.h>
 #include <pwd.h>
 
 namespace bs
@@ -26,6 +28,10 @@ namespace bs
 	Event<void(UINT32)> Platform::onCharInput;
 
 	Event<void()> Platform::onMouseCaptureChanged;
+
+	Mutex LinuxPlatform::eventLock;
+	Queue<LinuxButtonEvent> LinuxPlatform::buttonEvents;
+	LinuxMouseMotionEvent LinuxPlatform::mouseMotionEvent;
 
 	enum class X11CursorType
 	{
@@ -45,7 +51,7 @@ namespace bs
 		Deny,
 
 		Count
-	};;
+	};
 
 	struct Platform::Pimpl
 	{
@@ -64,6 +70,9 @@ namespace bs
 		Atom atomWmStateHidden;
 		Atom atomWmStateMaxVert;
 		Atom atomWmStateMaxHorz;
+
+		// XInput2
+		int xInput2Opcode;
 
 		// Clipboard
 		WString clipboardData;
@@ -494,6 +503,29 @@ namespace bs
 		return L"";
 	}
 
+	/** Maps X11 mouse button codes to Banshee button codes. */
+	ButtonCode xButtonToButtonCode(int button)
+	{
+		switch (button)
+		{
+		case Button1:
+			return BC_MOUSE_LEFT;
+		case Button2:
+			return BC_MOUSE_MIDDLE;
+		case Button3:
+			return BC_MOUSE_RIGHT;
+		default:
+			return (ButtonCode)(BC_MOUSE_LEFT + button - 1);
+		}
+	}
+
+	/** Maps X11 key codes to Banshee button codes (scancode). */
+	ButtonCode xKeyCodeToButtonCode(int keyCode)
+	{
+		// Turns out the conversion is quite easy.
+		return (ButtonCode)(keyCode - 8);
+	}
+
 	/** Maps Banshee button codes to X11 names for physical key locations. */
 	const char* keyCodeToKeyName(ButtonCode code)
 	{
@@ -730,6 +762,23 @@ namespace bs
 		return nullptr;
 	}
 
+	/**
+	 * Enqueue a button press/release event to be handled by the main thread
+	 * @param bc ButtonCode for the button that was pressed or released
+	 * @param pressed true if the button was pressed, false if it was released
+	 * @param timestamp Time when the event happened
+	 */
+	void enqueueButtonEvent(ButtonCode bc, bool pressed, UINT64 timestamp)
+	{
+		Lock eventLock(LinuxPlatform::eventLock);
+
+		LinuxButtonEvent event;
+		event.button = bc;
+		event.pressed = pressed;
+		event.timestamp = timestamp;
+		LinuxPlatform::buttonEvents.push(event);
+	}
+
 	void Platform::_messagePump()
 	{
 		while(true)
@@ -741,6 +790,40 @@ namespace bs
 
 			XEvent event;
 			XNextEvent(mData->xDisplay, &event);
+
+			XGenericEventCookie* cookie = &event.xcookie;
+			if (cookie->type == GenericEvent && cookie->extension == mData->xInput2Opcode)
+			{
+				XGetEventData(mData->xDisplay, cookie);
+				XIRawEvent* xInput2Event = (XIRawEvent*) cookie->data;
+				switch (xInput2Event->evtype)
+				{
+				case XI_RawMotion:
+					if (xInput2Event->valuators.mask_len > 0)
+					{
+						// Assume X/Y delta is stored in valuators 0/1 and vertical scroll in valuator 3.
+						// While there is an API that reliably tells us the valuator index for vertical scroll, there's
+						// nothing "more reliable" for X/Y axes, as the only way to possibly identify them from device
+						// info is by axis name, so we can use the axis index directly just as well. GDK seems to assume
+						// 0 for x and 1 for y too, so that's hopefully safe, and 3 appears to be common for the scroll
+						// wheel.
+						Vector<double> deltas(4, 0);
+						int currentValuesIndex = 0;
+						for (unsigned int valuator = 0; valuator < deltas.size(); valuator++)
+							if (XIMaskIsSet(xInput2Event->valuators.mask, valuator))
+								deltas[valuator] = xInput2Event->raw_values[currentValuesIndex++];
+
+						Lock eventLock(LinuxPlatform::eventLock);
+						LinuxPlatform::mouseMotionEvent.deltaX += deltas[0];
+						LinuxPlatform::mouseMotionEvent.deltaY += deltas[1];
+						LinuxPlatform::mouseMotionEvent.deltaZ += deltas[3]; // Not a typo - 2 is for horizontal scroll.
+					}
+					break;
+				}
+
+				XFreeEventData(mData->xDisplay, cookie);
+			}
+
 
 			switch (event.type)
 			{
@@ -767,6 +850,9 @@ namespace bs
 				break;
 			case KeyPress:
 			{
+				XKeyPressedEvent* keyEvent = (XKeyPressedEvent*) &event;
+				enqueueButtonEvent(xKeyCodeToButtonCode(keyEvent->keycode), true, (UINT64) keyEvent->time);
+
 				// Process text input
 				KeySym keySym = XkbKeycodeToKeysym(mData->xDisplay, (KeyCode)event.xkey.keycode, 0, 0);
 
@@ -806,11 +892,16 @@ namespace bs
 			}
 				break;
 			case KeyRelease:
-				// Do nothing
+			{
+				XKeyReleasedEvent* keyEvent = (XKeyReleasedEvent*) &event;
+				enqueueButtonEvent(xKeyCodeToButtonCode(keyEvent->keycode), false, (UINT64) keyEvent->time);
+			}
 				break;
 			case ButtonPress:
 			{
+				XButtonPressedEvent* buttonEvent = (XButtonPressedEvent*) &event;
 				UINT32 button = event.xbutton.button;
+				enqueueButtonEvent(xButtonToButtonCode(button), true, (UINT64) buttonEvent->time);
 
 				OSPointerButtonStates btnStates;
 				btnStates.mouseButtons[0] = (event.xbutton.state & Button1Mask) != 0;
@@ -878,7 +969,9 @@ namespace bs
 			}
 			case ButtonRelease:
 			{
+				XButtonReleasedEvent* buttonEvent = (XButtonReleasedEvent*) &event;
 				UINT32 button = event.xbutton.button;
+				enqueueButtonEvent(xButtonToButtonCode(button), false, (UINT64) buttonEvent->time);
 
 				Vector2I pos;
 				pos.x = event.xbutton.x_root;
@@ -1128,6 +1221,30 @@ namespace bs
 		Lock lock(mData->lock);
 		mData->xDisplay = XOpenDisplay(nullptr);
 		XSetErrorHandler(x11ErrorHandler);
+
+		// For raw, relative mouse motion events, XInput2 extension is required
+		int firstEvent;
+		int firstError;
+		if (!XQueryExtension(mData->xDisplay, "XInputExtension", &mData->xInput2Opcode, &firstEvent, &firstError)) {
+			BS_EXCEPT(InternalErrorException, "X Server doesn't support the XInput extension");
+		}
+		int majorVersion = 2;
+		int minorVersion = 0;
+		if (XIQueryVersion(mData->xDisplay, &majorVersion, &minorVersion) != Success) {
+			BS_EXCEPT(InternalErrorException, "X Server doesn't support at least the XInput 2.0 extension");
+		}
+
+		// Let XInput know we are interested in raw mouse movement events
+		XIEventMask mask;
+		mask.deviceid = XIAllDevices;
+		mask.mask_len = XIMaskLen(XI_LASTEVENT);
+		Vector<unsigned char> maskBuffer(mask.mask_len, 0);
+		mask.mask = maskBuffer.data();
+		XISetMask(mask.mask, XI_RawMotion);
+		// "RawEvents are sent exclusively to all root windows", so this should receive all events, even though we only
+		// select on one display's root window (untested for lack of second screen).
+		XISelectEvents(mData->xDisplay, XRootWindow(mData->xDisplay, DefaultScreen(mData->xDisplay)), &mask, 1);
+		XFlush(mData->xDisplay);
 
 		if(XSupportsLocale())
 		{
