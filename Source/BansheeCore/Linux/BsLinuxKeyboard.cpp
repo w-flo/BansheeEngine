@@ -27,10 +27,10 @@ namespace bs
 
 	void Keyboard::capture()
 	{
+		Lock lock(LinuxPlatform::eventLock);
+
 		if(m->hasInputFocus)
 		{
-			Lock lock(LinuxPlatform::eventLock);
-
 			while (!LinuxPlatform::buttonEvents.empty())
 			{
 				LinuxButtonEvent& event = LinuxPlatform::buttonEvents.front();

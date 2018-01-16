@@ -26,14 +26,17 @@ namespace bs
 
 	void Mouse::capture()
 	{
+		Lock lock(LinuxPlatform::eventLock);
+
 		if(m->hasInputFocus)
 		{
-			Lock lock(LinuxPlatform::eventLock);
 			double deltaX = round(LinuxPlatform::mouseMotionEvent.deltaX);
 			double deltaY = round(LinuxPlatform::mouseMotionEvent.deltaY);
 			double deltaZ = round(LinuxPlatform::mouseMotionEvent.deltaZ);
+
 			if (deltaX != 0 || deltaY != 0 || deltaZ != 0)
 				mOwner->_notifyMouseMoved(deltaX, deltaY, deltaZ);
+
 			LinuxPlatform::mouseMotionEvent.deltaX -= deltaX;
 			LinuxPlatform::mouseMotionEvent.deltaY -= deltaY;
 			LinuxPlatform::mouseMotionEvent.deltaZ -= deltaZ;

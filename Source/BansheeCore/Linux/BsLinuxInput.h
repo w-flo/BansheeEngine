@@ -35,23 +35,15 @@ namespace bs
 		Vector<GamepadInfo> gamepadInfos;
 	};
 
-	/**
-	 * Data about relative pointer / scroll wheel movement.
-	 */
+	/** Data about relative pointer / scroll wheel movement. */
 	struct LinuxMouseMotionEvent
 	{
-		double deltaX;
-		double deltaY;
-
-		/**
-		 * Relative vertical scroll amount.
-		 */
-		double deltaZ;
+		double deltaX; /**< Relative pointer movement in X direction. */
+		double deltaY; /**< Relative pointer movement in Y direction. */
+		double deltaZ; /**< Relative vertical scroll amount. */
 	};
 
-	/**
-	 * Data about a single button press or release.
-	 */
+	/** Data about a single button press or release. */
 	struct LinuxButtonEvent
 	{
 		UINT64 timestamp;
@@ -60,7 +52,5 @@ namespace bs
 	};
 
 #define BUFFER_SIZE_GAMEPAD 64
-#define BUFFER_SIZE_KEYBOARD 128
-#define BUFFER_SIZE_MOUSE 16
 }
 

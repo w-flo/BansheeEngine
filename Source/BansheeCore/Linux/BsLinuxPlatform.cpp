@@ -764,8 +764,9 @@ namespace bs
 
 	/**
 	 * Enqueue a button press/release event to be handled by the main thread
-	 * @param bc ButtonCode for the button that was pressed or released
-	 * @param pressed true if the button was pressed, false if it was released
+	 *
+	 * @param bc        ButtonCode for the button that was pressed or released
+	 * @param pressed   true if the button was pressed, false if it was released
 	 * @param timestamp Time when the event happened
 	 */
 	void enqueueButtonEvent(ButtonCode bc, bool pressed, UINT64 timestamp)
@@ -807,9 +808,9 @@ namespace bs
 						// info is by axis name, so we can use the axis index directly just as well. GDK seems to assume
 						// 0 for x and 1 for y too, so that's hopefully safe, and 3 appears to be common for the scroll
 						// wheel.
-						Vector<double> deltas(4, 0);
+						float deltas[4] = {0};
 						int currentValuesIndex = 0;
-						for (unsigned int valuator = 0; valuator < deltas.size(); valuator++)
+						for (unsigned int valuator = 0; valuator < 4; valuator++)
 							if (XIMaskIsSet(xInput2Event->valuators.mask, valuator))
 								deltas[valuator] = xInput2Event->raw_values[currentValuesIndex++];
 
@@ -1228,6 +1229,7 @@ namespace bs
 		if (!XQueryExtension(mData->xDisplay, "XInputExtension", &mData->xInput2Opcode, &firstEvent, &firstError)) {
 			BS_EXCEPT(InternalErrorException, "X Server doesn't support the XInput extension");
 		}
+
 		int majorVersion = 2;
 		int minorVersion = 0;
 		if (XIQueryVersion(mData->xDisplay, &majorVersion, &minorVersion) != Success) {
@@ -1238,9 +1240,10 @@ namespace bs
 		XIEventMask mask;
 		mask.deviceid = XIAllDevices;
 		mask.mask_len = XIMaskLen(XI_LASTEVENT);
-		Vector<unsigned char> maskBuffer(mask.mask_len, 0);
-		mask.mask = maskBuffer.data();
+		unsigned char maskBuffer[mask.mask_len] = {0};
+		mask.mask = maskBuffer;
 		XISetMask(mask.mask, XI_RawMotion);
+
 		// "RawEvents are sent exclusively to all root windows", so this should receive all events, even though we only
 		// select on one display's root window (untested for lack of second screen).
 		XISelectEvents(mData->xDisplay, XRootWindow(mData->xDisplay, DefaultScreen(mData->xDisplay)), &mask, 1);
