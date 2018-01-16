@@ -33,8 +33,6 @@ namespace bs
 	struct InputPrivateData
 	{
 		Vector<GamepadInfo> gamepadInfos;
-		Vector<INT32> mice;
-		Vector<INT32> keyboards;
 	};
 
 	/**
