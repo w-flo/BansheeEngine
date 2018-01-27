@@ -136,7 +136,7 @@ namespace bs
 	bool VertexElement::operator== (const VertexElement& rhs) const
 	{
 		if (mType != rhs.mType || mIndex != rhs.mIndex || mOffset != rhs.mOffset ||
-			mSemantic != rhs.mSemantic || mSource != rhs.mSource)
+			mSemantic != rhs.mSemantic || mSource != rhs.mSource  || mInstanceStepRate != rhs.mInstanceStepRate)
 		{
 			return false;
 		}
